@@ -23,7 +23,7 @@ The input will be a JSON file containing the following fields:
 }
 ```
 
-- **users**: A list of objects with `id` (unique user ID) and `name` (human-readable site name) for each active member in the run. The `name` is used to label sites in result reports. If `users` is not provided, a flat `user_ids` list of IDs will be accepted as a fallback (site names will display as raw IDs).
+- **users**: A list of objects with `id` (unique user ID) and `name` (human-readable site name) for each active member in the run. The `name` is used to label sites in result reports.
 - **computation_parameters**: A JSON object set by the consortium leader in the study configuration.
 - **host_identifier**: The IP address or hostname where the central node can be reached.
 - **fed_learn_port**: The port clients will use to connect to the central node.
