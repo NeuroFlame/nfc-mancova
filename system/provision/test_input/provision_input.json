@@ -1,7 +1,11 @@
 {
-    "users": [
-        {"id": "66289c79aebab67040a20068", "name": "site1"},
-        {"id": "66289c79aebab67040a20069", "name": "site2"}
+    "active_participants": [
+        {"participantId": "66289c79aebab67040a20068", "kind": "user", "displayName": "site1", "userId": "66289c79aebab67040a20068", "vaultId": null},
+        {"participantId": "66289c79aebab67040a20069", "kind": "user", "displayName": "site2", "userId": "66289c79aebab67040a20069", "vaultId": null}
+    ],
+    "user_ids": [
+        "66289c79aebab67040a20068",
+        "66289c79aebab67040a20069"
     ],
     "computation_parameters": "{\"testKey\":\"testValue\"}",
     "fed_learn_port": 5000,

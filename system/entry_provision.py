@@ -46,9 +46,9 @@ def main():
     path_run = os.path.join('/provisioning')
 
     # Extract arguments from provision input
-    users = provision_input.get('users')  # list of {id, name}
-    user_ids = [u['id'] for u in users]
-    site_id_name_map = {u['id']: u['name'] for u in users}
+    user_ids = provision_input.get('user_ids')  # flat list of IDs
+    active_participants = provision_input.get('active_participants', [])
+    site_id_name_map = {p['userId']: p['displayName'] for p in active_participants}
     computation_parameters_dict = json.loads(provision_input.get('computation_parameters'))
     computation_parameters_dict['site_id_name_map'] = site_id_name_map
     computation_parameters = json.dumps(computation_parameters_dict)

@@ -12,10 +12,11 @@ The input will be a JSON file containing the following fields:
 
 ```json
 {
-    "users": [
-        {"id": "user-id-1", "name": "Site A"},
-        {"id": "user-id-2", "name": "Site B"}
+    "active_participants": [
+        {"participantId": "user-id-1", "kind": "user", "displayName": "Site A", "userId": "user-id-1", "vaultId": null},
+        {"participantId": "user-id-2", "kind": "user", "displayName": "Site B", "userId": "user-id-2", "vaultId": null}
     ],
+    "user_ids": ["user-id-1", "user-id-2"],
     "computation_parameters": "string containing computation parameters",
     "fed_learn_port": 1234,
     "admin_port": 5678,
@@ -23,7 +24,8 @@ The input will be a JSON file containing the following fields:
 }
 ```
 
-- **users**: A list of objects with `id` (unique user ID) and `name` (human-readable site name) for each active member in the run. The `name` is used to label sites in result reports.
+- **active_participants**: A list of participant objects. `userId` is the unique ID and `displayName` is the human-readable site name used to label sites in result reports.
+- **user_ids**: A flat list of user IDs (matches the `userId` fields in `active_participants`).
 - **computation_parameters**: A JSON object set by the consortium leader in the study configuration.
 - **host_identifier**: The IP address or hostname where the central node can be reached.
 - **fed_learn_port**: The port clients will use to connect to the central node.

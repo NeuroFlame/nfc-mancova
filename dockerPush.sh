@@ -1,14 +1,14 @@
 #!/bin/bash
 
 # Input parameters
-REPOSITORY="dylanrmartin/computations"     # Default repository
+REPOSITORY="coinstacteam"     # Default repository
 COMPUTATION_HANDLE="nfc-mancova"           # Docker image name
 
 # Get the current commit hash if not provided
 COMMIT_HASH=${1:-$(git rev-parse HEAD)}
 
 # Full tag for the image
-IMAGE_TAG="${REPOSITORY}:${COMPUTATION_HANDLE}"
+IMAGE_TAG="${REPOSITORY}/${COMPUTATION_HANDLE}"
 
 # Build the image using Dockerfile-prod
 echo "Building the image with Dockerfile-prod..."
