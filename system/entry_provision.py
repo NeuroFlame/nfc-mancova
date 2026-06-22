@@ -41,6 +41,8 @@ def main():
     
     # Load provision input
     provision_input = load_provision_input(provision_input_path)
+    logger.info(f"Provision input keys: {list(provision_input.keys())}")
+    logger.info(f"Provision input: {json.dumps(provision_input, indent=2)}")
     path_run = os.path.join('/provisioning')
 
     # Extract arguments from provision input
