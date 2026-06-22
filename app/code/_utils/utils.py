@@ -59,6 +59,23 @@ def get_output_directory_path(fl_ctx: FLContext) -> str:
     logging.info(f"Output directory path for simulator and poc: {simulator_and_poc_path}")
     return simulator_and_poc_path
 
+def get_aggregation_directory_path(fl_ctx: FLContext) -> str:
+    """Return the aggregation output directory, persisted within the workspace."""
+    job_id = fl_ctx.get_job_id()
+
+    env_path = os.getenv("AGGREGATION_DIR")
+    if env_path:
+        os.makedirs(env_path, exist_ok=True)
+        logging.info(f"Aggregation directory path from environment: {env_path}")
+        return env_path
+
+    repo_root_path = find_repo_root_path()
+    path = os.path.join(repo_root_path, f"test_output/{job_id}/aggregation")
+    os.makedirs(path, exist_ok=True)
+    logging.info(f"Aggregation directory path for simulator and poc: {path}")
+    return path
+
+
 def get_parameters_file_path(fl_ctx: FLContext) -> str:
     """Determine and return the parameters file path based on the available paths."""
 

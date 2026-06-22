@@ -3,8 +3,9 @@
   "executors": [
     {
       "tasks": [
-        "GET_LOCAL_AVERAGE_AND_COUNT",
-        "ACCEPT_GLOBAL_AVERAGE"
+        "QUERY_SCAN_LENGTH",
+        "RUN_MANCOVA",
+        "ACCEPT_GLOBAL_RESULTS"
       ],
       "executor": {
         "path": "executor.executor.MyExecutor",

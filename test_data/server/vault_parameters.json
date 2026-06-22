@@ -1,23 +1,22 @@
 {
   "ica_method": "spatially constrained",
-  "num_components": 20,
+  "num_components": 53,
   "scica_template": "/workspace/app/local_data/NeuroMark.nii",
   "mask": "/workspace/app/local_data/mask.nii",
   "TR": 2,
   "features": ["fnc correlations", "timecourses spectra"],
-  "common_timepoints": false,
+  "common_timepoints": true,
   "numOfPCs": [5, 5, 5],
   "univariate_test_list": [
     {
       "regression": {
-        "gender": ["age"],
-        "age": ["gender"]
+        "age": []
       }
     }
   ],
   "t_threshold": 1.0,
   "freq_limits": [0.1, 0.15],
-  "p_threshold": 1.0,
+  "p_threshold": 0.05,
   "display_p_threshold": 1.0,
   "comp_network_names": {
     "SC":  [1, 2, 3, 4, 5],
@@ -29,8 +28,13 @@
     "CR":  [50, 51, 52, 53]
   },
   "image_values": "positive",
-  "threshdesc": "none",
-  "skip_gica": false,
-  "run_mancova": false,
-  "run_univariate_tests": true
+  "threshdesc": "fdr",
+  "skip_gica": true,
+  "gica_input_dir": ".",
+  "run_mancova": true,
+  "run_univariate_tests": true,
+  "site_id_name_map": {
+    "site1": "CMI-HealthyBrain",
+    "site2": "TReNDS-COBRE"
+  }
 }

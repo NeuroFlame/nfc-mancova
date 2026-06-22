@@ -9,16 +9,14 @@
     {
       "id": "aggregator",
       "path": "aggregator.aggregator.MyAggregator",
-      "args": {
-      }
+      "args": {}
     }
   ],
   "workflows": [
     {
       "id": "controller",
       "path": "controller.controller.MyController",
-      "args": {
-      }
+      "args": {}
     }
   ]
 }

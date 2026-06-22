@@ -1,117 +1,140 @@
 import json
-import logging
+from typing import Callable, List
+
 from nvflare.apis.impl.controller import Controller, Task, ClientTask
 from nvflare.apis.fl_context import FLContext
 from nvflare.apis.signal import Signal
 from nvflare.apis.shareable import Shareable
-from _utils.utils import get_parameters_file_path
-from typing import Callable
+
+from _utils.logger import NvFlareLogger
+from _utils.utils import get_aggregation_directory_path, get_parameters_file_path
 
 
-TASK_NAME_GET_LOCAL_AVERAGE_AND_COUNT = "GET_LOCAL_AVERAGE_AND_COUNT"
-TASK_NAME_ACCEPT_GLOBAL_AVERAGE = "ACCEPT_GLOBAL_AVERAGE"
+TASK_NAME_RUN_MANCOVA = "RUN_MANCOVA"
+TASK_NAME_ACCEPT_GLOBAL_RESULTS = "ACCEPT_GLOBAL_RESULTS"
+TASK_NAME_QUERY_SCAN_LENGTH = "QUERY_SCAN_LENGTH"
 AGGREGATOR_ID = "aggregator"
 
 
 class MyController(Controller):
+    """
+    Controller for federated MANCOVA computation.
+
+    Orchestrates the distributed MANCOVA workflow:
+    1. Broadcasts Group ICA task to all sites
+    2. Collects and aggregates results at central node
+    3. Performs global MANCOVA analysis
+    4. Distributes results back to sites
+    """
+
     def __init__(
         self,
         min_clients: int = 2,
         wait_time_after_min_received: int = 10,
         task_timeout: int = 0,
     ):
-        """
-        Initializes the SrrController with specific parameters for task broadcasting.
-
-        :param min_clients: Minimum number of client responses required.
-        :param wait_time_after_min_received: Time to wait after receiving minimum responses.
-        :param task_timeout: Timeout for task completion.
-        """
         super().__init__()
         self._task_timeout = task_timeout
         self._min_clients = min_clients
         self._wait_time_after_min_received = wait_time_after_min_received
-
-#### Computation Author Defined Section ####
-### This is where computation authors will define the control flow logic ###
+        self._logger: NvFlareLogger = None
 
     def start_controller(self, fl_ctx: FLContext) -> None:
-        """
-        Called when the controller starts. It assigns the SRR aggregator component
-        and loads computation parameters into the shared context.
-
-        This is a Framework-Specific Required Method.
-
-        :param fl_ctx: Federated learning context for this run.
-        """
-        # Assign the aggregator to the controller
+        """Initialize the controller and load computation parameters."""
         self.aggregator = self._engine.get_component(AGGREGATOR_ID)
-        # Load and set computation parameters for the sites
         self._load_and_set_computation_parameters(fl_ctx)
+        output_dir = get_aggregation_directory_path(fl_ctx)
+        params = fl_ctx.get_prop("COMPUTATION_PARAMETERS", {})
+        log_level = params.get("log_level", "info")
+        self._logger = NvFlareLogger("controller.log", output_dir, log_level)
+        self._logger.info("Controller started")
 
     def control_flow(self, abort_signal: Signal, fl_ctx: FLContext) -> None:
         """
-        Main method for defining the control flow of computations. This is where
-        developers implement the main workflow. Broadcasts tasks to all sites, 
-        aggregates results, and broadcasts the final global result.
+        Main federated computation workflow for MANCOVA.
 
-        This is the primary method that computation authors should focus on.
-
-        :param abort_signal: Signal for aborting the flow if needed.
-        :param fl_ctx: Federated learning context for this run.
+        1. (Optional) Negotiate common_timepoints across sites
+        2. Broadcast Group ICA task to sites
+        3. Collect local results via aggregator
+        4. Perform central MANCOVA analysis
+        5. Return global results to sites
         """
-        # Broadcast the regression task and send site results to the aggregator
+        params = fl_ctx.get_prop("COMPUTATION_PARAMETERS", {})
+
+        # Step 0 (optional): If common_timepoints=true, query each site for its
+        # native scan length and resolve to the global minimum before proceeding.
+        if isinstance(params.get("common_timepoints"), bool) and params["common_timepoints"]:
+            self._negotiate_common_timepoints(params, fl_ctx, abort_signal)
+
+        self._logger.info("Broadcasting RUN_MANCOVA to all sites")
         self._broadcast_task(
-            task_name=TASK_NAME_GET_LOCAL_AVERAGE_AND_COUNT,
+            task_name=TASK_NAME_RUN_MANCOVA,
             data=Shareable(),
-            result_cb=self._accept_site_regression_result,
+            result_cb=self._accept_site_mancova_result,
             fl_ctx=fl_ctx,
             abort_signal=abort_signal,
         )
 
-        # Aggregate results from all sites
+        self._logger.info("Aggregating results")
         aggregate_result = self.aggregator.aggregate(fl_ctx)
 
-        # Broadcast the global aggregated results to all sites
+        self._logger.info("Broadcasting ACCEPT_GLOBAL_RESULTS to all sites")
         self._broadcast_task(
-            task_name=TASK_NAME_ACCEPT_GLOBAL_AVERAGE,
+            task_name=TASK_NAME_ACCEPT_GLOBAL_RESULTS,
             data=aggregate_result,
             result_cb=None,
             fl_ctx=fl_ctx,
             abort_signal=abort_signal,
         )
 
-    def _accept_site_regression_result(self, client_task: ClientTask, fl_ctx: FLContext) -> bool:
-        """
-        Callback method that processes each site's regression result and sends it
-        to the aggregator for aggregation.
+    def _negotiate_common_timepoints(
+        self, params: dict, fl_ctx: FLContext, abort_signal: Signal
+    ) -> None:
+        """Query all sites for their scan length and set common_timepoints to the minimum."""
+        scan_lengths: List[int] = []
 
-        Computation authors can override this if they need to modify how results
-        are processed before aggregation, but this is optional.
+        def _collect(client_task: ClientTask, fl_ctx: FLContext) -> bool:
+            length = client_task.result.get("scan_length", 0)
+            if length:
+                scan_lengths.append(int(length))
+            return True
 
-        :param client_task: The task result received from a client site.
-        :param fl_ctx: Federated learning context for this run.
-        :return: Boolean indicating whether the result was successfully accepted.
-        """
+        self._logger.info("Broadcasting QUERY_SCAN_LENGTH to all sites")
+        self._broadcast_task(
+            task_name=TASK_NAME_QUERY_SCAN_LENGTH,
+            data=Shareable(),
+            result_cb=_collect,
+            fl_ctx=fl_ctx,
+            abort_signal=abort_signal,
+        )
+
+        if scan_lengths:
+            resolved = min(scan_lengths)
+            self._logger.info(
+                f"common_timepoints negotiated: site lengths={scan_lengths} → min={resolved}"
+            )
+            params["common_timepoints"] = resolved
+        else:
+            self._logger.warning(
+                "common_timepoints=true but no scan lengths received; disabling truncation"
+            )
+            params["common_timepoints"] = 0
+
+        fl_ctx.set_prop("COMPUTATION_PARAMETERS", params, private=False, sticky=True)
+
+    def _accept_site_mancova_result(self, client_task: ClientTask, fl_ctx: FLContext) -> bool:
+        """Callback to process each site's result and send to aggregator."""
         return self.aggregator.accept(client_task.result, fl_ctx)
 
-#### End of Computation Author Defined Section ####
-
-#### Framework Helper Methods: No modification necessary ####
-
-    def _broadcast_task(self, task_name: str, data: Shareable, result_cb: Callable[[ClientTask, FLContext], bool], fl_ctx: FLContext, abort_signal: Signal) -> None:
-        """
-        Broadcasts a task to all client sites and waits for responses.
-
-        Computation authors can use this method to simplify task broadcasting.
-        Typically, this method does not need to be modified.
-
-        :param task_name: Name of the task to broadcast.
-        :param data: Shareable object containing the data to send.
-        :param result_cb: Callback for handling results from each client site.
-        :param fl_ctx: Federated learning context for this run.
-        :param abort_signal: Signal used to abort the task if needed.
-        """
+    def _broadcast_task(
+        self,
+        task_name: str,
+        data: Shareable,
+        result_cb: Callable[[ClientTask, FLContext], bool],
+        fl_ctx: FLContext,
+        abort_signal: Signal,
+    ) -> None:
+        """Broadcast a task to all client sites."""
         self.broadcast_and_wait(
             task=Task(
                 name=task_name,
@@ -127,43 +150,21 @@ class MyController(Controller):
         )
 
     def _load_and_set_computation_parameters(self, fl_ctx: FLContext) -> None:
-        """
-        Loads computation parameters from a file and sets them in the shared context
-        for all sites to access.
-
-        This is a utility method that computation authors typically do not need to modify.
-
-        :param fl_ctx: Federated learning context for this run.
-        """
+        """Load and distribute computation parameters."""
         with open(get_parameters_file_path(fl_ctx), 'r') as f:
             fl_ctx.set_prop(
                 key="COMPUTATION_PARAMETERS",
                 value=json.load(f),
                 private=False,
-                sticky=True
+                sticky=True,
             )
 
-#### Framework-Specific Required Methods: No modification necessary ####
-
     def process_result_of_unknown_task(self, task: Task, fl_ctx: FLContext) -> None:
-        """
-        Handles results for tasks that are not explicitly recognized.
-        This method can be overridden by developers for custom handling.
-
-        This is a Framework-Specific Required Method.
-
-        :param task: The task whose result is being processed.
-        :param fl_ctx: Federated learning context for this run.
-        """
+        """Handle unknown task results."""
         pass
 
     def stop_controller(self, fl_ctx: FLContext) -> None:
-        """
-        Called when the controller stops. Developers can override this method
-        for cleanup or custom logic.
-
-        This is a Framework-Specific Required Method.
-
-        :param fl_ctx: Federated learning context for this run.
-        """
-        pass
+        """Cleanup when controller stops."""
+        if self._logger is not None:
+            self._logger.info("Controller stopped")
+            self._logger.close()

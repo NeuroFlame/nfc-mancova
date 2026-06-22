@@ -30,7 +30,8 @@
   },
   "image_values": "positive",
   "threshdesc": "none",
-  "skip_gica": false,
-  "run_mancova": false,
+  "skip_gica": true,
+  "gica_input_dir": "coinstac-gica",
+  "run_mancova": true,
   "run_univariate_tests": true
 }

@@ -1,4 +1,60 @@
-FROM python:3.8-buster
+FROM python:3.8-bullseye
+
+ENV MCRROOT=/usr/local/MATLAB/MATLAB_Runtime/v91
+ENV MATLAB_RUNTIME=${MCRROOT}
+ENV MCR_CACHE_ROOT=/tmp/mcrcache
+
+# Install OS-level dependencies required for MATLAB Runtime and NiPype
+RUN apt-get update && apt-get install -y \
+    curl \
+    wget \
+    unzip \
+    xz-utils \
+    libx11-dev \
+    libxcomposite-dev \
+    libxcursor-dev \
+    libxdamage-dev \
+    libxext-dev \
+    libxfixes-dev \
+    libxft-dev \
+    libxi-dev \
+    libxrandr-dev \
+    libxt-dev \
+    libxtst-dev \
+    libxxf86vm-dev \
+    libasound2-dev \
+    libatk1.0-dev \
+    libcairo2-dev \
+    gconf2 \
+    libsndfile1-dev \
+    libxcb1-dev \
+    libxslt-dev \
+    libgtk-3-dev \
+    libxrender1 \
+    libxt6 \
+    libsm6 \
+    libxi6 \
+    libxmu6 \
+    libxinerama1 \
+    libglu1-mesa \
+    libgl1-mesa-glx \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install MATLAB Runtime R2016b (required by GIFT standalone)
+RUN mkdir /tmp/mcr_installer && \
+    cd /tmp/mcr_installer && \
+    wget -q http://ssd.mathworks.com/supportfiles/downloads/R2016b/deployment_files/R2016b/installers/glnxa64/MCR_R2016b_glnxa64_installer.zip && \
+    unzip -q MCR_R2016b_glnxa64_installer.zip && \
+    ./install -mode silent -agreeToLicense yes && \
+    rm -rf /tmp/mcr_installer
+
+# Remove MCR's bundled libfreetype so Bullseye's system version is used.
+# MCR R2016b bundles FreeType 2.6.11 which lacks FT_Done_MM_Var (added in 2.7.0),
+# causing a symbol lookup error when Bullseye's libfontconfig (compiled against 2.10+) is loaded.
+RUN rm -f /usr/local/MATLAB/MATLAB_Runtime/v91/bin/glnxa64/libfreetype.so.6 \
+          /usr/local/MATLAB/MATLAB_Runtime/v91/bin/glnxa64/libfreetype.so.6.11.1
+
+RUN mkdir -p /tmp/mcrcache
 
 # Upgrade pip and setuptools
 RUN python3 -m pip install -U pip
@@ -13,12 +69,27 @@ COPY ./requirements.txt /workspace/requirements.txt
 # Install dependencies from requirements.txt
 RUN python3 -m pip install -r /workspace/requirements.txt
 
+# Copy the GIFT NiPype interface from the toolbox into site-packages
+RUN mkdir -p /usr/local/lib/python3.8/site-packages/nipype/interfaces/
+COPY ./groupicatv4.0b/icatb/nipype-0.10.0/nipype/interfaces/gift /usr/local/lib/python3.8/site-packages/nipype/interfaces/gift
+
 # Copy the rest of the application files
 COPY ./app/ /workspace/app/
 COPY ./system/entry_central.py /workspace/system/entry_central.py
 COPY ./system/entry_edge.py /workspace/system/entry_edge.py
 COPY ./system/provision/ /workspace/system/provision/
 COPY ./system/entry_provision.py /workspace/system/entry_provision.py
+COPY ./groupicatv4.0b /app/groupicatv4.0b
+
+# Pre-warm the MCR cache so the first real GIFT call doesn't pay cold-start cost
+RUN (timeout 20s /app/groupicatv4.0b/GroupICATv4.0b_standalone/run_groupica.sh /usr/local/MATLAB/MATLAB_Runtime/v91/; exit 0)
+
+# GIFT/MATLAB Runtime configuration
+# If the GIFT toolbox is present locally, mount or copy it to /app/groupicatv4.0b
+# If MATLAB Runtime is installed to a different path, override MATLAB_RUNTIME.
+ENV GIFT_HOME=/app/groupicatv4.0b
+ENV MATLAB_RUNTIME=/usr/local/MATLAB/MATLAB_Runtime/v91
+ENV MATLAB_CMD="${GIFT_HOME}/GroupICATv4.0b_standalone/run_groupica.sh ${MATLAB_RUNTIME}/"
 
 # Set environment variables
 ENV PYTHONPATH=/workspace/app/code/

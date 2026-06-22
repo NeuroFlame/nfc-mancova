@@ -1,17 +1,22 @@
-import logging
 import json
 import os
 
+from nvflare.apis.dxo import DXO, DataKind, from_shareable
 from nvflare.apis.executor import Executor
 from nvflare.apis.fl_constant import FLContextKey
 from nvflare.apis.fl_context import FLContext
-from nvflare.apis.shareable import Shareable
+from nvflare.apis.shareable import ReservedHeaderKey, Shareable
 from nvflare.apis.signal import Signal
-from _utils.utils import get_data_directory_path, get_output_directory_path
-from .local_average import get_local_average_and_count
 
-TASK_NAME_GET_LOCAL_AVERAGE_AND_COUNT = "GET_LOCAL_AVERAGE_AND_COUNT"
-TASK_NAME_ACCEPT_GLOBAL_AVERAGE = "ACCEPT_GLOBAL_AVERAGE"
+from _utils.logger import NvFlareLogger
+from _utils.types import ConfigDTO
+from _utils.utils import get_data_directory_path, get_output_directory_path
+from .mancova_edge_computation import run_edge_mancova, query_scan_length
+
+
+TASK_NAME_RUN_MANCOVA = "RUN_MANCOVA"
+TASK_NAME_ACCEPT_GLOBAL_RESULTS = "ACCEPT_GLOBAL_RESULTS"
+TASK_NAME_QUERY_SCAN_LENGTH = "QUERY_SCAN_LENGTH"
 
 
 class MyExecutor(Executor):
@@ -23,65 +28,121 @@ class MyExecutor(Executor):
         abort_signal: Signal,
     ) -> Shareable:
 
-        logging.info(f"Task Name: {task_name}")
+        site_name = fl_ctx.get_prop(FLContextKey.CLIENT_NAME, "unknown")
+        output_dir = get_output_directory_path(fl_ctx)
+        computation_parameters = _get_computation_parameters(fl_ctx)
+        log_level = computation_parameters.get("log_level", "info")
 
-        if task_name == TASK_NAME_GET_LOCAL_AVERAGE_AND_COUNT:
-            data = load_data(fl_ctx)
-            computation_parameters = get_computation_parameters(fl_ctx)
-            decimal_places = computation_parameters["decimal_places"]
+        site_logger = NvFlareLogger(f"{site_name}.log", output_dir, log_level)
+        site_logger.info("Task:", task_name)
 
-            local_average_and_count = get_local_average_and_count(
-                data, decimal_places)
+        try:
+            if task_name == TASK_NAME_QUERY_SCAN_LENGTH:
+                config = ConfigDTO(
+                    site_name=site_name,
+                    data_dir=get_data_directory_path(fl_ctx),
+                    output_dir=output_dir,
+                    parameters=computation_parameters,
+                    logger=site_logger,
+                )
+                length = query_scan_length(config)
+                result = Shareable()
+                result["scan_length"] = length
+                return result
 
-            save_results_to_file(local_average_and_count,
-                                 "local_average.json", fl_ctx)
-            shareable = Shareable()
-            shareable["result"] = local_average_and_count
-            return shareable
+            if task_name == TASK_NAME_RUN_MANCOVA:
+                config = ConfigDTO(
+                    site_name=site_name,
+                    data_dir=get_data_directory_path(fl_ctx),
+                    output_dir=output_dir,
+                    parameters=computation_parameters,
+                    logger=site_logger,
+                )
+                local_results = run_edge_mancova(config)
 
-        if task_name == TASK_NAME_ACCEPT_GLOBAL_AVERAGE:
-            result = {"global_average": shareable["global_average"]}
-            save_results_to_file(result, "global_average.json", fl_ctx)
-            return Shareable()
+                # Binary stats files go into a DXO; everything else stays in the Shareable.
+                stats_files = local_results.pop("univariate_stat_info_files", {})
+                dxo = DXO(data_kind=DataKind.COLLECTION, data=stats_files)
+
+                outgoing = Shareable()
+                outgoing["edge_results"] = {
+                    k: v for k, v in local_results.items()
+                    if k not in ("covariates",)  # drop large non-essential dicts
+                }
+                _merge_dxo(outgoing, dxo)
+
+                _save_json(
+                    {k: v for k, v in local_results.items()
+                     if not isinstance(v, (bytes, dict)) or k != "covariates_df"},
+                    "edge_mancova_results.json",
+                    output_dir,
+                    site_logger,
+                )
+                return outgoing
+
+            if task_name == TASK_NAME_ACCEPT_GLOBAL_RESULTS:
+                try:
+                    dxo = from_shareable(shareable)
+                    # dxo.data = {rel_path: bytes} — full aggregation output directory
+                    agg_dir = os.path.join(output_dir, "aggregation")
+                    os.makedirs(agg_dir, exist_ok=True)
+                    for rel_path, blob in dxo.data.items():
+                        dest = os.path.join(agg_dir, rel_path)
+                        os.makedirs(os.path.dirname(dest), exist_ok=True)
+                        with open(dest, "wb") as f:
+                            f.write(blob)
+                    site_logger.info(f"Unpacked {len(dxo.data)} aggregation files to {agg_dir}")
+                except Exception as dxo_err:
+                    site_logger.warning("DXO unpack failed, falling back to report_html:", str(dxo_err))
+
+                # Always write the HTML report string when present (backward compat + fallback).
+                global_results = shareable.get("global_results", {})
+                report_html = global_results.get("report_html")
+                if report_html:
+                    with open(os.path.join(output_dir, "index.html"), "w") as f:
+                        f.write(report_html)
+                    site_logger.info("Report written to", output_dir + "/index.html")
+
+                _save_json(
+                    {k: v for k, v in global_results.items() if k != "report_html"},
+                    "global_mancova_results.json",
+                    output_dir,
+                    site_logger,
+                )
+                return Shareable()
+
+            site_logger.error("Unknown task:", task_name)
+            raise ValueError(f"Unknown task: {task_name}")
+
+        finally:
+            site_logger.close()
 
 
-def load_data(fl_ctx: FLContext):
-    data_dir_path = get_data_directory_path(fl_ctx)
-    data_file_filepath = os.path.join(data_dir_path, "data.json")
-    logging.info(f"Loading data from: {data_file_filepath}")
-    try:
-        with open(data_file_filepath, "r") as file:
-            data = json.load(file)
-        validate_data_format(data)
-        return data
-    except FileNotFoundError:
-        raise RuntimeError(f"Data file not found at {data_file_filepath}")
-    except json.JSONDecodeError:
-        raise RuntimeError(f"Invalid JSON format in {data_file_filepath}")
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_computation_parameters(fl_ctx: FLContext) -> dict:
+    return fl_ctx.get_peer_context().get_prop("COMPUTATION_PARAMETERS", {})
 
 
-def validate_data_format(data):
-    """
-    Validates that the data is a list of numbers.
-
-    :param data: The data to validate.
-    :raises ValueError: If the data is not a list of numbers.
-    """
-    if not isinstance(data, list) or not all(isinstance(item, (int, float)) for item in data):
-        raise ValueError("Data must be a list of numbers")
-
-
-def get_computation_parameters(fl_ctx: FLContext):
-    return fl_ctx.get_peer_context().get_prop("COMPUTATION_PARAMETERS", {"decimal_places": 2})
+def _merge_dxo(outgoing: Shareable, dxo: DXO) -> None:
+    """Inline a DXO into an existing Shareable so from_shareable() can reconstruct it."""
+    dxo_spl = dxo.to_shareable()
+    header_map = dxo_spl.get(ReservedHeaderKey.HEADERS, {})
+    for hdr_key, hdr_val in header_map.items():
+        outgoing.set_header(hdr_key, hdr_val)
+    for key, val in dxo_spl.items():
+        if key != ReservedHeaderKey.HEADERS:
+            outgoing[key] = val
 
 
-def save_results_to_file(results: dict, file_name: str, fl_ctx: FLContext):
-    output_dir = get_output_directory_path(fl_ctx)
-    logging.info(f"Saving results to: {output_dir}")
+def _save_json(data: dict, filename: str, output_dir: str, logger: NvFlareLogger) -> None:
     os.makedirs(output_dir, exist_ok=True)
+    path = os.path.join(output_dir, filename)
     try:
-        with open(os.path.join(output_dir, file_name), "w") as f:
-            json.dump(results, f, indent=4)
-        logging.info(f"Results successfully saved to: {os.path.join(output_dir, file_name)}")
+        with open(path, "w") as f:
+            json.dump(data, f, indent=4, default=str)
+        logger.info("Saved", path)
     except Exception as e:
-        raise RuntimeError(f"Failed to save results to {file_name}: {e}")
+        raise RuntimeError(f"Failed to save {filename}: {e}")
