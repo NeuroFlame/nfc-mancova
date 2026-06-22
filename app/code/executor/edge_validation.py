@@ -10,13 +10,19 @@ def validate_edge_inputs(config: ConfigDTO) -> None:
     params = config.parameters
 
     if params.get("skip_gica", False):
-        gica_input_dir = params.get("gica_input_dir", ".")
+        gica_input_dir = params.get("gica_input_dir", "")
+        if not gica_input_dir:
+            raise ValueError(
+                "skip_gica is true but gica_input_dir is not set. "
+                "Provide the path to the pre-existing GIFT ICA output directory "
+                "(relative to the site data directory, e.g. \"coinstac-gica\")."
+            )
         base_dir = (
             gica_input_dir
             if os.path.isabs(gica_input_dir)
             else os.path.join(config.data_dir, gica_input_dir)
         )
-        if not os.path.exists(base_dir):
+        if not os.path.isdir(base_dir):
             raise FileNotFoundError(f"GICA input directory not found: {base_dir}")
         config.logger.info("Validated GICA input dir:", base_dir)
 
