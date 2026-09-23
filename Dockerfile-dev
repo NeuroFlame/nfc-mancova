@@ -1,5 +1,6 @@
-FROM --platform=linux/amd64 python:3.8-bullseye
+FROM python:3.11-bookworm
 
+# --- MATLAB Runtime R2016b + GIFT standalone (computation-specific) ---
 ENV MCRROOT=/usr/local/MATLAB/MATLAB_Runtime/v91
 ENV MATLAB_RUNTIME=${MCRROOT}
 ENV MCR_CACHE_ROOT=/tmp/mcrcache
@@ -24,7 +25,6 @@ RUN apt-get update && apt-get install -y \
     libasound2-dev \
     libatk1.0-dev \
     libcairo2-dev \
-    gconf2 \
     libsndfile1-dev \
     libxcb1-dev \
     libxslt-dev \
@@ -36,29 +36,26 @@ RUN apt-get update && apt-get install -y \
     libxmu6 \
     libxinerama1 \
     libglu1-mesa \
-    libgl1-mesa-glx \
+    libgl1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install MATLAB Runtime R2016b (required by GIFT standalone)
 RUN mkdir /tmp/mcr_installer && \
     cd /tmp/mcr_installer && \
-    wget -q http://ssd.mathworks.com/supportfiles/downloads/R2016b/deployment_files/R2016b/installers/glnxa64/MCR_R2016b_glnxa64_installer.zip && \
+    wget -q https://ssd.mathworks.com/supportfiles/downloads/R2016b/deployment_files/R2016b/installers/glnxa64/MCR_R2016b_glnxa64_installer.zip && \
     unzip -q MCR_R2016b_glnxa64_installer.zip && \
     ./install -mode silent -agreeToLicense yes && \
     rm -rf /tmp/mcr_installer
 
-# Remove MCR's bundled libfreetype so Bullseye's system version is used.
-# MCR R2016b bundles FreeType 2.6.11 which lacks FT_Done_MM_Var (added in 2.7.0),
-# causing a symbol lookup error when Bullseye's libfontconfig (compiled against 2.10+) is loaded.
-RUN rm -f /usr/local/MATLAB/MATLAB_Runtime/v91/bin/glnxa64/libfreetype.so.6 \
-          /usr/local/MATLAB/MATLAB_Runtime/v91/bin/glnxa64/libfreetype.so.6.11.1
+# MCR R2016b bundles FreeType 2.6, which lacks FT_Done_MM_Var needed by the
+# system libfontconfig; remove it so the distribution's FreeType is used.
+RUN rm -f ${MCRROOT}/bin/glnxa64/libfreetype.so.6 \
+          ${MCRROOT}/bin/glnxa64/libfreetype.so.6.11.1
 
 RUN mkdir -p /tmp/mcrcache
+# --- end MATLAB Runtime ---
 
 RUN python3 -m pip install -U pip
 RUN python3 -m pip install -U setuptools
-RUN python3 -m pip install nvflare==2.4.0
-
 WORKDIR /workspace/
 
 # Copy the requirements.txt file
@@ -67,20 +64,16 @@ COPY ./requirements.txt /workspace/requirements.txt
 # Install dependencies from requirements.txt
 RUN python3 -m pip install -r /workspace/requirements.txt
 
-# Copy the GIFT NiPype interface from the toolbox into site-packages
-RUN mkdir -p /usr/local/lib/python3.8/site-packages/nipype/interfaces/
-COPY ./groupicatv4.0b/icatb/nipype-0.10.0/nipype/interfaces/gift /usr/local/lib/python3.8/site-packages/nipype/interfaces/gift
-
-# Copy the GIFT toolbox if present locally
+# --- GIFT toolbox and its nipype interface (computation-specific) ---
+COPY ./groupicatv4.0b/icatb/nipype-0.10.0/nipype/interfaces/gift /usr/local/lib/python3.11/site-packages/nipype/interfaces/gift
 COPY ./groupicatv4.0b /app/groupicatv4.0b
 
-# Pre-warm the MCR cache
-RUN (timeout 20s /app/groupicatv4.0b/GroupICATv4.0b_standalone/run_groupica.sh /usr/local/MATLAB/MATLAB_Runtime/v91/; exit 0)
+# Pre-warm the MCR cache so the first real GIFT call doesn't pay cold-start cost
+RUN (timeout 20s /app/groupicatv4.0b/GroupICATv4.0b_standalone/run_groupica.sh ${MCRROOT}/; exit 0)
 
-# GIFT/MATLAB Runtime configuration
 ENV GIFT_HOME=/app/groupicatv4.0b
-ENV MATLAB_RUNTIME=/usr/local/MATLAB/MATLAB_Runtime/v91
 ENV MATLAB_CMD="${GIFT_HOME}/GroupICATv4.0b_standalone/run_groupica.sh ${MATLAB_RUNTIME}/"
+# --- end GIFT ---
 
 ENV PYTHONPATH=/workspace/app/code/
 ENV NVFLARE_POC_WORKSPACE=/workspace/poc-workspace

@@ -8,14 +8,19 @@
   "components": [
     {
       "id": "aggregator",
-      "path": "aggregator.aggregator.MyAggregator",
+      "path": "runtime.aggregator.RuntimeAggregator",
+      "args": {}
+    },
+    {
+      "id": "artifact_transfer",
+      "path": "framework.artifact_transfer.ArtifactTransfer",
       "args": {}
     }
   ],
   "workflows": [
     {
       "id": "controller",
-      "path": "controller.controller.MyController",
+      "path": "runtime.controller.RuntimeController",
       "args": {}
     }
   ]

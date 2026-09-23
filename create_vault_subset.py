@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""
-create_vault_subset.py — Create N-subject subsets of GICA vaults for fast testing.
+"""create_vault_subset.py — Create N-subject subsets of GICA vaults for fast testing.
 
 Usage:
     python create_vault_subset.py [--n-subjects 20] [--common-timepoints 144]
@@ -25,7 +24,6 @@ import os
 import shutil
 import struct
 
-import numpy as np
 import pandas as pd
 
 VAULT_BASE = "/Users/admin/Desktop/Vault Data"
@@ -45,7 +43,9 @@ VAULTS = [
 
 
 def patch_hdf5_mat(src: str, dst: str, n: int, n_scans: int = 0) -> None:
+    """Copy an HDF5 ICA parameter file, patching its subject and scan counts."""
     import h5py
+
     shutil.copy2(src, dst)
     with h5py.File(dst, "r+") as f:
         f["sesInfo/numOfSub"][0, 0] = float(n)
@@ -74,9 +74,9 @@ def _v5_read_tag(data: bytes, offset: int):
 
 
 def _v5_find_sesinfo_field_data_offsets(data: bytes, target_fields: set) -> dict:
-    """
-    Parse a MATLAB v5 mat file and return {field_name: byte_offset_of_value}
-    for each requested field in the top-level sesInfo struct.
+    """Map requested top-level sesInfo fields to their value byte offsets.
+
+    Parses a MATLAB v5 mat file and returns {field_name: byte_offset_of_value}.
 
     The MATLAB v5 struct layout is:
       miMATRIX (type 14)
@@ -121,21 +121,23 @@ def _v5_find_sesinfo_field_data_offsets(data: bytes, target_fields: set) -> dict
 
     field_names = []
     for i in range(num_fields):
-        raw = data[fn_block_offset + i * field_name_length:
-                   fn_block_offset + (i + 1) * field_name_length]
+        raw = data[
+            fn_block_offset + i * field_name_length : fn_block_offset
+            + (i + 1) * field_name_length
+        ]
         field_names.append(raw.rstrip(b"\x00").decode("ascii", "replace"))
 
     # Walk field values to find our targets
-    for i, fname in enumerate(field_names):
+    for fname in field_names:
         ftag = _v5_read_tag(data, sub)
         if ftag is None:
             break
         if fname in target_fields:
             # Inside this miMATRIX: flags → dims → name → data
             fs = ftag[2]
-            fs = _v5_read_tag(data, fs)[3]   # skip flags
-            fs = _v5_read_tag(data, fs)[3]   # skip dims
-            fs = _v5_read_tag(data, fs)[3]   # skip name
+            fs = _v5_read_tag(data, fs)[3]  # skip flags
+            fs = _v5_read_tag(data, fs)[3]  # skip dims
+            fs = _v5_read_tag(data, fs)[3]  # skip name
             data_tag = _v5_read_tag(data, fs)
             if data_tag:
                 results[fname] = data_tag[2]  # offset of the raw value byte(s)
@@ -146,7 +148,6 @@ def _v5_find_sesinfo_field_data_offsets(data: bytes, target_fields: set) -> dict
 
 def patch_v5_mat(src: str, dst: str, n: int, n_scans: int = 0) -> None:
     """Patch numOfSub, numOfDataSets, and optionally numOfScans in a MATLAB v5 mat file."""
-    import struct
     shutil.copy2(src, dst)
     with open(dst, "rb") as fh:
         data = bytearray(fh.read())
@@ -175,6 +176,7 @@ def patch_v5_mat(src: str, dst: str, n: int, n_scans: int = 0) -> None:
 def truncate_nii_timepoints(src: str, dst: str, n_tp: int) -> None:
     """Copy a NIfTI timecourse file, keeping only the first n_tp volumes."""
     import nibabel as nib
+
     img = nib.load(src)
     data = img.get_fdata()
     if data.ndim < 2 or data.shape[0] <= n_tp:
@@ -186,8 +188,11 @@ def truncate_nii_timepoints(src: str, dst: str, n_tp: int) -> None:
     nib.save(new_img, dst)
 
 
-def create_subset(src: str, dst: str, n: int, mat_format: str, common_timepoints: int = 0) -> None:
-    print(f"\n{'='*60}")
+def create_subset(
+    src: str, dst: str, n: int, mat_format: str, common_timepoints: int = 0
+) -> None:
+    """Build an n-subject vault subset from src into dst."""
+    print(f"\n{'=' * 60}")
     print(f"Creating {'all' if n == 0 else n}-subject subset")
     print(f"  src: {src}")
     print(f"  dst: {dst}")
@@ -200,8 +205,8 @@ def create_subset(src: str, dst: str, n: int, mat_format: str, common_timepoints
 
     # Copy subject timecourse NIfTIs (sorted); n=0 means all subjects
     all_nii = sorted(
-        glob.glob(os.path.join(src, "*timecourses*.nii")) +
-        glob.glob(os.path.join(src, "*timecourses*.nii.gz"))
+        glob.glob(os.path.join(src, "*timecourses*.nii"))
+        + glob.glob(os.path.join(src, "*timecourses*.nii.gz"))
     )
     subset_nii = all_nii if n == 0 else all_nii[:n]
     for f in subset_nii:
@@ -223,7 +228,9 @@ def create_subset(src: str, dst: str, n: int, mat_format: str, common_timepoints
         out_df = df.head(actual_n)
         out_df.to_csv(os.path.join(dst, "covariates.csv"), index=False)
         if len(df) != actual_n:
-            print(f"  Wrote covariates.csv ({len(out_df)} rows, trimmed from {len(df)} to match NIfTI count)")
+            print(
+                f"  Wrote covariates.csv ({len(out_df)} rows, trimmed from {len(df)} to match NIfTI count)"
+            )
         else:
             print(f"  Wrote covariates.csv ({len(out_df)} rows)")
     else:
@@ -242,13 +249,16 @@ def create_subset(src: str, dst: str, n: int, mat_format: str, common_timepoints
 
 
 def main() -> None:
+    """Create subset vaults for each configured source vault."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n-subjects", type=int, default=20, help="Subjects per site")
     parser.add_argument(
-        "--common-timepoints", type=int, default=0,
+        "--common-timepoints",
+        type=int,
+        default=0,
         help="Truncate all timecourse NIfTIs to this many volumes (0 = no truncation). "
-             "Use the minimum across sites (e.g. 144 for CMI+TReNDS) to enable "
-             "timecourses spectra federation."
+        "Use the minimum across sites (e.g. 144 for CMI+TReNDS) to enable "
+        "timecourses spectra federation.",
     )
     args = parser.parse_args()
 
@@ -257,7 +267,13 @@ def main() -> None:
     created = []
     for cfg in VAULTS:
         dst = cfg["dst_template"].format(n=tag)
-        create_subset(cfg["src"], dst, n, cfg["mat_format"], common_timepoints=args.common_timepoints)
+        create_subset(
+            cfg["src"],
+            dst,
+            n,
+            cfg["mat_format"],
+            common_timepoints=args.common_timepoints,
+        )
         created.append(dst)
 
     print("\n=== Subset vaults ready ===")

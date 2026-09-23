@@ -14,37 +14,52 @@ The pipeline runs in three phases:
 
 ## Architecture
 
-| Component | Location | Role |
-|---|---|---|
-| Controller | `app/code/controller/controller.py` | Orchestrates the federated workflow; broadcasts tasks and coordinates aggregation |
-| Executor | `app/code/executor/executor.py` | Routes NVFlare tasks to edge computation logic |
-| Edge computation | `app/code/executor/mancova_edge_computation.py` | Runs Group ICA and local univariate tests at each site |
-| Aggregator | `app/code/aggregator/aggregator.py` | Accepts site results and triggers central aggregation |
-| Central aggregation | `app/code/aggregator/mancova_central_aggregation.py` | Pools covariates and runs global MANCOVA |
-| GIFT wrappers | `app/code/_utils/gift_wrappers.py` | Thin NiPype wrappers around GIFT Group ICA and MANCOVA |
-| Data transfer | `app/code/_utils/data_transfer.py` | Serialises binary files (`.mat`) to/from bytes for transfer through NVFlare Shareables |
+This computation is authored against [computation-nvflare-boilerplate](https://github.com/NeuroFlame/computation-nvflare-boilerplate).
+Only `app/code/computation/` is computation-specific; `app/code/framework/`,
+`app/code/runtime/`, `app/config/`, `system/`, and the tooling scripts are
+boilerplate-managed and are updated with `scripts/migrate_computation.py`
+from the boilerplate repository.
 
-## Quick Start
+The workflow is declared in `app/code/computation/spec.py`:
 
-### Building
+| Step | Runs on | Function | Purpose |
+|---|---|---|---|
+| `local_step` | sites | `inputs.load_site_inputs` → `local_math.report_scan_length` | Validate parameters, discover NIfTI/covariate files, report scan length when `common_timepoints` is `true` |
+| `remote_step` | central | `remote_math.resolve_common_timepoints` | Resolve the shared timepoint count (minimum across sites) |
+| `local_step` | sites | `local_math.run_site_mancova` | Run GIFT Group ICA and local univariate MANCOVA tests; send `*_mancovan_stats_info.mat` files as artifacts |
+| `remote_step` | central | `remote_math.aggregate_mancova` | Pool covariates, run GIFT aggregate stats, build the HTML report, and send the aggregation directory back as an artifact |
+| `site_output_step` | sites | `remote_math.write_site_outputs` | Unpack the aggregation directory and write `index.html` and `global_mancova_results.json` |
+
+| Module | Role |
+|---|---|
+| `computation/types.py` | Dataclasses exchanged between steps |
+| `computation/gift.py` | Thin NiPype wrappers around GIFT Group ICA and MANCOVA |
+| `computation/report.py` | Self-contained HTML report |
+
+## Running this computation
+
+Run the NVFlare simulator in Docker against `test_data/`:
 
 ```bash
-# Production image
-docker build -f Dockerfile-prod -t nfc-mancova:latest .
-
-# Development image
-docker build -f Dockerfile-dev -t nfc-mancova-dev:latest .
+./run_local_simulation.sh site1,site2            # builds Dockerfile-dev, then simulates
+./run_local_simulation.sh site1,site2 --no-build # reuse the image after code-only changes
 ```
 
-### Local Development
+Site results land in `test_output/simulate_job/<site>/` and central results in
+`test_output/simulate_job/server/`.
+
+Lint, format-check, compile, and unit tests:
 
 ```bash
-bash dockerRun.sh
+make check
 ```
 
-### Running a Federated Computation
+For an interactive shell in the dev image, use `./dockerRun.sh`; `./dockerRunVault.sh`
+mounts the real GICA vault data (see the script header).
 
-Refer to the NeuroFLAME provisioning and deployment documentation for running computations across federated sites.
+Publishing production images uses `./dockerPush.sh` (a wrapper for
+`scripts/publish_computation_image.py`) with the image coordinates in
+`.neuroflame.json`.
 
 ## MATLAB / GIFT Environment
 
@@ -56,13 +71,9 @@ The computation requires the GIFT standalone toolbox and MATLAB Runtime (MCR).
 | `MCRROOT` / `MATLAB_RUNTIME` | Root of the MATLAB Runtime installation | `/usr/local/MATLAB/MATLAB_Runtime/v91` |
 | `MATLAB_CMD` | Command used by NiPype to launch the GIFT standalone runtime | `$GIFT_HOME/GroupICATv4.0b_standalone/run_groupica.sh $MCRROOT/` |
 
-To install MATLAB Runtime before building the image:
-
-```bash
-./download_mcr.sh
-```
-
-If the `groupicatv4.0b` toolbox is available locally, place it at the repo root so it can be copied into the container at build time.
+Both Dockerfiles install MATLAB Runtime R2016b and copy the GIFT toolbox
+from `groupicatv4.0b/` at the repo root (not committed; see `.gitignore`), so
+that directory must exist before building.
 
 ## Input Data
 
@@ -91,11 +102,7 @@ Computation parameters are passed via `parameters.json` (path set by `PARAMETERS
     "univariate_test_list": [
         {"regression": {"name": ["age", "diagnosis"]}}
     ],
-    "run_mancova": true,
-    "site_id_name_map": {
-        "site-1": "Site A",
-        "site-2": "Site B"
-    }
+    "run_mancova": true
 }
 ```
 
@@ -105,35 +112,19 @@ Computation parameters are passed via `parameters.json` (path set by `PARAMETERS
 nfc-mancova/
 ├── app/
 │   ├── code/
-│   │   ├── _utils/
-│   │   │   ├── data_transfer.py       # Binary file serialisation helpers
-│   │   │   ├── gift_wrappers.py       # NiPype/GIFT interface wrappers
-│   │   │   └── utils.py               # NVFlare path utilities
-│   │   ├── controller/
-│   │   │   └── controller.py
-│   │   ├── executor/
-│   │   │   ├── executor.py
-│   │   │   └── mancova_edge_computation.py
-│   │   └── aggregator/
-│   │       ├── aggregator.py
-│   │       └── mancova_central_aggregation.py
-│   └── config/
-│       ├── config_fed_server.json
-│       └── config_fed_client.json
-├── system/
-│   ├── entry_central.py
-│   ├── entry_edge.py
-│   ├── entry_provision.py
-│   └── provision/
+│   │   ├── computation/        # computation-specific code (edit here)
+│   │   ├── framework/          # boilerplate-managed
+│   │   └── runtime/            # boilerplate-managed NVFlare entrypoints
+│   ├── config/                 # boilerplate-managed NVFlare job config
+│   └── local_data/             # mask.nii and NeuroMark.nii
+├── system/                     # boilerplate-managed provisioning and entrypoints
+├── scripts/                    # boilerplate-managed manifest and publishing tools
+├── tests/
 ├── test_data/
-│   └── server/
-│       └── parameters.json
+├── .neuroflame.json            # computation version and image coordinates
 ├── display_notes.md
-├── requirements.txt
-├── Dockerfile-prod
-├── Dockerfile-dev
-├── dockerRun.sh
-└── download_mcr.sh
+├── Dockerfile-dev / Dockerfile-prod
+└── run_local_simulation.sh
 ```
 
 ## References
