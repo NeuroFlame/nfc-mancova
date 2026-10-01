@@ -1,3 +1,5 @@
+**Source code:** [https://github.com/NeuroFlame/nfc-mancova](https://github.com/NeuroFlame/nfc-mancova)
+
 ### Overview
 
 Federated MANCOVA (Multivariate Analysis of Covariance) with Group ICA enables multi-site neuroimaging analysis without sharing raw data. Each site runs Group ICA locally using the GIFT toolbox, then statistical results are aggregated at the central node to produce global multivariate and univariate analyses across all sites.
