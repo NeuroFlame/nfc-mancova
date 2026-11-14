@@ -1,4 +1,4 @@
-FROM python:3.11-bookworm
+FROM python:3.11-bookworm AS installed
 
 # --- MATLAB Runtime R2016b + GIFT standalone (computation-specific) ---
 ENV MCRROOT=/usr/local/MATLAB/MATLAB_Runtime/v91
@@ -90,3 +90,38 @@ ENV PYTHONPATH=/workspace/app/code/
 ENV DATA_DIR=/workspace/data/
 ENV OUTPUT_DIR=/workspace/output/
 ENV PARAMETERS_FILE_PATH=/workspace/runKit/parameters.json
+
+# Distribute installed software only, not the build toolchain or installer caches.
+FROM python:3.11-slim-bookworm
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+    libxext6 libxt6 libxmu6 libglu1-mesa libxrandr2 libgomp1 \
+    libglib2.0-0 libnss3 libasound2 libgbm1 libxrender1 libxcomposite1 \
+    libxcursor1 libxi6 libxdamage1 libxfixes3 libxinerama1 libxkbcommon0 \
+    libsm6 libice6 libfontconfig1 libfreetype6 libxtst6 libxxf86vm1 \
+    libatk1.0-0 libcairo2 libsndfile1 libxcb1 libxslt1.1 libgtk-3-0 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Retain the full R2016b runtime, including licensing and product metadata.
+COPY --from=installed /usr/local/MATLAB/MATLAB_Runtime/v91 /usr/local/MATLAB/MATLAB_Runtime/v91
+COPY --from=installed /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=installed /usr/local/bin/nvflare /usr/local/bin/nvflare
+COPY --from=installed /usr/share/fonts /usr/share/fonts
+COPY --from=installed /etc/fonts /etc/fonts
+# Keep the selected standalone plus toolbox support; omit the duplicate distribution.
+COPY --from=installed /app/groupicatv4.0b/GroupICATv4.0b_standalone /app/groupicatv4.0b/GroupICATv4.0b_standalone
+COPY --from=installed /app/groupicatv4.0b/icatb /app/groupicatv4.0b/icatb
+
+ENV MCRROOT=/usr/local/MATLAB/MATLAB_Runtime/v91 \
+    MATLAB_RUNTIME=/usr/local/MATLAB/MATLAB_Runtime/v91 \
+    MCR_CACHE_ROOT=/tmp/mcrcache \
+    GIFT_HOME=/app/groupicatv4.0b \
+    MATLAB_CMD="/app/groupicatv4.0b/GroupICATv4.0b_standalone/run_groupica.sh /usr/local/MATLAB/MATLAB_Runtime/v91/" \
+    PYTHONPATH=/workspace/app/code/
+WORKDIR /workspace/
+
+COPY --from=installed /workspace/app/ /workspace/app/
+COPY --from=installed /workspace/system/ /workspace/system/
+ENV DATA_DIR=/workspace/data/ \
+    OUTPUT_DIR=/workspace/output/ \
+    PARAMETERS_FILE_PATH=/workspace/runKit/parameters.json

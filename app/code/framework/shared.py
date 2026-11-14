@@ -70,14 +70,18 @@ def build_runtime_context(
         "author",
         f"round-{current_round}",
     )
+    cache_dir = os.path.join(output_dir, ".artifacts", "cache")
     os.makedirs(artifact_dir, mode=0o700, exist_ok=True)
     os.chmod(artifact_dir, 0o700)
+    os.makedirs(cache_dir, mode=0o700, exist_ok=True)
+    os.chmod(cache_dir, 0o700)
 
     return RuntimeContext(
         fl_ctx=fl_ctx,
         data_dir=data_dir,
         output_dir=output_dir,
         artifact_dir=artifact_dir,
+        cache_dir=cache_dir,
         current_round=current_round,
         logger=logger,
         max_inline_array_bytes=spec.max_inline_array_bytes,

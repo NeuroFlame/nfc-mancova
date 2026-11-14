@@ -20,6 +20,36 @@ Only `app/code/computation/` is computation-specific; `app/code/framework/`,
 boilerplate-managed and are updated with `scripts/migrate_computation.py`
 from the boilerplate repository.
 
+The shared code includes the provisioned participant-count fix (each task waits
+for every provisioned participant), native-temporary-filesystem artifact
+staging for Docker Desktop compatibility, and the run-scoped cache API.
+The computation-specific MATLAB/GIFT Dockerfile sections and dependencies are
+preserved when updating shared code; do not overwrite those Dockerfiles with
+the generic boilerplate versions.
+
+### Reusing files across iterations
+
+Author functions can request `cache_dir` on either sites or central. Each
+participant has a separate cache, stable across iterations within one run and
+removed at run shutdown. `cache_file()` validates a filename and returns its
+path; authors choose how to read and write the contents:
+
+```python
+from framework import cache_file
+
+
+def compute_local(inputs, *, cache_dir):
+    path = cache_file("local-statistics.npy", cache_dir=cache_dir)
+    # Write/read this path with the appropriate library for your file format.
+    ...
+```
+
+Caching does not transfer files. To send a cached file, copy it into the current
+step's iteration-specific `artifact_dir` and return that copy with `artifact()`.
+See the boilerplate's
+[author API guide](https://github.com/NeuroFlame/computation-nvflare-boilerplate/blob/main/docs/computation_development/core_components_and_workflow.md)
+and [artifact guide](https://github.com/NeuroFlame/computation-nvflare-boilerplate/blob/main/docs/computation_development/artifacts.md).
+
 The workflow is declared in `app/code/computation/spec.py`:
 
 | Step | Runs on | Function | Purpose |
@@ -74,6 +104,39 @@ The computation requires the GIFT standalone toolbox and MATLAB Runtime (MCR).
 Both Dockerfiles install MATLAB Runtime R2016b and copy the GIFT toolbox
 from `groupicatv4.0b/` at the repo root (not committed; see `.gitignore`), so
 that directory must exist before building.
+
+### Smaller runtime images
+
+Both Dockerfiles use an installation stage followed by a slim Python 3.11
+runtime stage. The final image keeps the full MATLAB R2016b runtime and the
+selected GIFT standalone, Python packages, toolbox support, and plotting fonts.
+Build tools, installer scratch files, package caches, and the duplicate GIFT
+standalone distribution are not copied into the final image. The final image
+does not retain the install-stage MCR extraction cache, so the first GIFT call
+extracts its cache at runtime.
+
+The production candidate measured 3.34 GB versus 5.02 GB for the full image
+(Docker uncompressed sizes). R2016b uses binary file manifests, unlike the JSON
+manifests used by the VBM R2022b product selector; MATLAB product/GPU pruning is
+not applied here.
+
+`scripts/runtime_smoke.m` exercises deterministic MATLAB matrix calculations,
+GIFT NIfTI reads, and PNG rendering through the standalone executable. Mount
+a writable scratch directory at `/checks` and the script at
+`/smoke/runtime_smoke.m`, then invoke:
+
+```sh
+/app/groupicatv4.0b/GroupICATv4.0b_standalone/run_groupica.sh \
+  /usr/local/MATLAB/MATLAB_Runtime/v91/ /smoke/runtime_smoke.m
+```
+
+Compare the saved MAT variables (excluding creation-header timestamps) and PNG
+image-data chunks between full and slim images. MATLAB embeds creation times
+in PNG metadata, so whole-file hashes differ even for identical image data.
+The baseline and slim smoke runs matched every saved numerical variable and
+the PNG image-data chunks exactly. This is a runtime compatibility smoke
+check, not a full federated GICA/MANCOVA numerical regression. Publish images
+through `bash dockerPush.sh`; use `--local` for a labeled local-only build.
 
 ## Input Data
 

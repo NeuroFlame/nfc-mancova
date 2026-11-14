@@ -26,6 +26,7 @@ class RuntimeContext:
     data_dir: str
     output_dir: str
     artifact_dir: str
+    cache_dir: str
     current_round: int
     logger: Any = None
     max_inline_array_bytes: int = DEFAULT_MAX_INLINE_ARRAY_BYTES
